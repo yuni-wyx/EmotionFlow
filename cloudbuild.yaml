@@ -22,7 +22,8 @@ steps:
       '--image', 'us-central1-docker.pkg.dev/the-mesh-458219-a9/emotionflow/emotionflow:latest',
       '--region', 'us-central1',
       '--platform', 'managed',
-      '--allow-unauthenticated'
+      '--allow-unauthenticated',
+      '--set-secrets', 'OPENAI_API_KEY=OPENAI_API_KEY:latest'
     ]
 
 images:

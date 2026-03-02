@@ -1,54 +1,71 @@
-### bg_color.py
+# bg_color.py
+import os
 from dotenv import load_dotenv
-import google.generativeai as genai
-import openai
 from openai import OpenAI, RateLimitError, APIError
-from secret import get_secret
+from config import is_dev_mode
 
 load_dotenv()
-# gemini_api_key = get_secret("GEMINI_API_KEY")
+DEV_MODE = is_dev_mode()
 
-# api_key = gemini_api_key
-# genai.configure(api_key = api_key)
-# model = genai.GenerativeModel(model_name = "models/gemini-2.0-flash")
+# 🎨 建議：其實背景顏色根本可以 rule-based（超穩）
+EMOTION_COLOR_MAP = {
+    "joy": "#FFD166, #FFB703, #FB8500",
+    "sadness": "#4D96FF, #3A86FF, #4361EE",
+    "anger": "#EF476F, #D62828, #9D0208",
+    "anxiety": "#8E7DBE, #6A4C93, #5E60CE",
+    "love": "#FF99C8, #F15BB5, #F72585",
+    "calm": "#90DBF4, #A9DEF9, #E4C1F9",
+    "neutral": "#CCCCCC, #999999, #666666",
+}
 
-openai_api_key = get_secret("OPENAI_API_KEY")
+DEFAULT_GRADIENT = "#CCCCCC, #999999, #666666"
 
-api_key = openai_api_key
-client = OpenAI(api_key=openai_api_key)
 
 def generate_color(emotion=None):
-    prompt = f"""
-    You are an assistant that provides a smooth gradient background color theme 
-    for a web page based on the emotion "{emotion}".
+    emotion_key = (emotion or "neutral").lower()
 
-    Output RULES:
-    - Return EXACTLY 3 HEX color codes
-    - Format: "#RRGGBB, #RRGGBB, #RRGGBB"
-    - No explanations, no additional text.
-    """
+    # ✅ DEV MODE：完全不打 OpenAI
+    if DEV_MODE:
+        return EMOTION_COLOR_MAP.get(emotion_key, DEFAULT_GRADIENT)
+
+    # 如果你其實不想再用 LLM，這裡可以直接 return rule-based
+    # return EMOTION_COLOR_MAP.get(emotion_key, DEFAULT_GRADIENT)
+
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if not openai_api_key:
+        return EMOTION_COLOR_MAP.get(emotion_key, DEFAULT_GRADIENT)
+
+    client = OpenAI(api_key=openai_api_key)
+
+    prompt = f"""
+You generate aesthetic HEX color gradients.
+
+Emotion: "{emotion}"
+
+RULES:
+- Return EXACTLY 3 HEX color codes
+- Format: "#RRGGBB, #RRGGBB, #RRGGBB"
+- No explanations.
+"""
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You generate aesthetic HEX color gradients."},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ],
-            temperature=0.6,  # 稍微高一點，讓顏色更有創意
+            temperature=0.6,
         )
 
-        colors = response.choices[0].message.content.strip()
-        return colors
+        colors = (response.choices[0].message.content or "").strip()
 
-    except RateLimitError as e:
-        print(f"[ERROR] OpenAI rate limit exceeded in generate_color: {e}")
-        return "#CCCCCC, #999999, #666666"  # fallback 灰階
+        # 🔒 基本格式檢查（避免模型亂回）
+        if colors.count("#") == 3 and "," in colors:
+            return colors
 
-    except APIError as e:
-        print(f"[ERROR] OpenAI API error in generate_color: {e}")
-        return "#CCCCCC, #999999, #666666"
+        return EMOTION_COLOR_MAP.get(emotion_key, DEFAULT_GRADIENT)
 
-    except Exception as e:
-        print(f"[ERROR] Unexpected error in generate_color: {e}")
-        return "#CCCCCC, #999999, #666666"
+    except (RateLimitError, APIError, Exception) as e:
+        print("[WARN] generate_color fallback:", repr(e))
+        return EMOTION_COLOR_MAP.get(emotion_key, DEFAULT_GRADIENT)
