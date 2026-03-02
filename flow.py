@@ -2,11 +2,11 @@
 import os
 import json
 import re
+import uuid
 from dotenv import load_dotenv
 from openai import OpenAI, APIError, RateLimitError
 from config import is_dev_mode
 
-# DEV MODE 下：用現成 functions（它們會 mock，不燒 quota）
 from classifier import classify_emotion_gemini
 from responder import generate_response_gemini
 from recommender import generate_music_recommendation
@@ -14,6 +14,17 @@ from bg_color import generate_color
 
 load_dotenv()
 DEV_MODE = is_dev_mode()
+
+
+def _normalize_emotion(emotion: str) -> str:
+    """
+    Normalize emotion label for downstream rule-based functions.
+    e.g. "anxiety 😟" -> "anxiety"
+    """
+    e = (emotion or "neutral").strip().lower()
+    if not e:
+        return "neutral"
+    return e.split()[0]
 
 
 def _extract_json(text: str) -> dict | None:
@@ -32,26 +43,28 @@ def _extract_json(text: str) -> dict | None:
     m = re.search(r"\{.*\}", text, flags=re.DOTALL)
     if not m:
         return None
+
+    block = m.group(0).strip()
+
+    # attempt parse
     try:
-        return json.loads(m.group(0))
+        return json.loads(block)
+    except Exception:
+        pass
+
+    # lightweight "repair": replace single quotes with double quotes (best-effort)
+    try:
+        repaired = block.replace("'", '"')
+        return json.loads(repaired)
     except Exception:
         return None
 
 
 def generate_flow(user_input: str) -> dict:
-    """
-    Returns:
-      {
-        ok: bool,
-        emotion: str,
-        category: str,
-        response: str,
-        music: {song, artist, reason},
-        color: "#RRGGBB, #RRGGBB, #RRGGBB",
-        source: "mock" | "openai",
-        error_type?: ...
-      }
-    """
+    request_id = uuid.uuid4().hex[:10]
+
+    if not user_input or not user_input.strip():
+        return {"ok": False, "error_type": "bad_request", "message": "Empty input.", "request_id": request_id}
 
     # ✅ DEV MODE: no OpenAI calls
     if DEV_MODE:
@@ -62,11 +75,12 @@ def generate_flow(user_input: str) -> dict:
         reply = generate_response_gemini(user_input, emotion)
         music_text = generate_music_recommendation(user_input, emotion)
 
-        # parse the 3-line format robustly
         lines = [ln.strip() for ln in (music_text or "").split("\n") if ln.strip()]
         song = lines[0].replace("Song:", "").strip() if len(lines) > 0 else ""
         artist = lines[1].replace("Artist:", "").strip() if len(lines) > 1 else ""
         reason = lines[2].replace("Reason:", "").strip() if len(lines) > 2 else (music_text or "")
+
+        emotion_key = _normalize_emotion(emotion)
 
         return {
             "ok": True,
@@ -74,14 +88,15 @@ def generate_flow(user_input: str) -> dict:
             "category": category,
             "response": reply,
             "music": {"song": song, "artist": artist, "reason": reason},
-            "color": generate_color(emotion),
+            "color": generate_color(emotion_key),
             "source": "mock",
+            "request_id": request_id,
         }
 
     # ✅ PROD: single OpenAI call
     openai_api_key = os.getenv("OPENAI_API_KEY")
     if not openai_api_key:
-        return {"ok": False, "error_type": "config", "message": "Missing OPENAI_API_KEY."}
+        return {"ok": False, "error_type": "config", "message": "Missing OPENAI_API_KEY.", "request_id": request_id}
 
     client = OpenAI(api_key=openai_api_key)
 
@@ -124,15 +139,20 @@ Return JSON with EXACT keys:
         data = _extract_json(text)
 
         if not data:
-            # fallback: minimal safe output
+            emotion_key = "neutral"
             return {
                 "ok": True,
                 "emotion": "neutral",
                 "category": "Unknown",
                 "response": "I hear you — that sounds like a lot. I’m here with you.",
-                "music": {"song": "Clair de Lune", "artist": "Claude Debussy", "reason": "A calm, gentle piece to steady your mood."},
-                "color": generate_color("neutral"),
+                "music": {
+                    "song": "Clair de Lune",
+                    "artist": "Claude Debussy",
+                    "reason": "A calm, gentle piece to steady your mood."
+                },
+                "color": generate_color(emotion_key),
                 "source": "openai_fallback_parse",
+                "request_id": request_id,
             }
 
         emotion = data.get("emotion", "neutral")
@@ -143,21 +163,43 @@ Return JSON with EXACT keys:
         artist = music.get("artist", "")
         reason = music.get("reason", "")
 
+        emotion_key = _normalize_emotion(emotion)
+
         return {
             "ok": True,
             "emotion": emotion,
             "category": category,
             "response": response_text,
             "music": {"song": song, "artist": artist, "reason": reason},
-            "color": generate_color(emotion),  # rule-based / fallback, not LLM
+            "color": generate_color(emotion_key),
             "source": "openai",
+            "request_id": request_id,
         }
 
     except RateLimitError as e:
-        return {"ok": False, "error_type": "quota", "message": str(e)}
+        # includes "insufficient_quota" cases in practice
+        return {
+            "ok": False,
+            "error_type": "quota",
+            "message": "Model quota exceeded or temporarily unavailable.",
+            "detail": str(e),
+            "request_id": request_id,
+        }
 
     except APIError as e:
-        return {"ok": False, "error_type": "api", "message": str(e)}
+        return {
+            "ok": False,
+            "error_type": "api",
+            "message": "OpenAI API error occurred. Please try again later.",
+            "detail": str(e),
+            "request_id": request_id,
+        }
 
     except Exception as e:
-        return {"ok": False, "error_type": "unknown", "message": repr(e)}
+        return {
+            "ok": False,
+            "error_type": "unknown",
+            "message": "Unexpected server error occurred.",
+            "detail": repr(e),
+            "request_id": request_id,
+        }

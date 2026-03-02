@@ -201,9 +201,9 @@ function sendMusicFeedback(button, feedbackType) {
         user_id: user_id,
         music_recommendations: recommendation,
         music_emotion: emotion,
-        music_liked: liked
-    };
-
+        music_liked: liked,
+        music_text: originalUserInput
+        };
     fetch("/music_feedback", {
     method: "POST",
     headers: {
@@ -239,74 +239,72 @@ chatForm.addEventListener('submit', async e => {
     sendBtn.disabled = true;
 
     // 2) Store user_input in MongoDB
-    await fetch('/submit', {
+    fetch('/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-            user_id: user_id,
-            user_input: text 
-        })
-    });
+        body: JSON.stringify({ user_id, user_input: text })
+        }).catch(err => console.warn("submit failed:", err));
 
-    // 2) Show the user’s message in the chat
+    // 3) Show the user’s message in the chat
     addMessage(text, false);
     userInput.value = '';
 
     try {
-        // 1. emotion classification
-        const emoRes = await fetch('/predict', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({text})
-        });
-        const emoData = await emoRes.json();
-        const emotion = emoData.emotion || 'Unknown';
-
-        const colorRes = await fetch('/api/color', {
+        // ✅ Single-call pipeline
+        const flowRes = await fetch('/api/flow', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ emotion })
+            body: JSON.stringify({ text })
         });
-        const colorData = await colorRes.json();
-        const rawColors = colorData.color || "#ddd, #eee, #ccc";
+
+        const flowData = await flowRes.json();
+
+        if (!flowRes.ok || flowData.ok === false) {
+            console.error("Flow error:", flowData);
+            await typeText('🤖 Sorry — I had trouble generating a response. Please try again.', true, 600);
+            return;
+        }
+
+        const emotion = flowData.emotion || 'neutral';
+        const aiReply = flowData.response || 'Sorry, I could not respond.';
+        const rawColors = flowData.color || "#ddd, #eee, #ccc";
         const colors = rawColors.split(',').map(c => c.trim());
 
         updateFlowingBackground(colors);
 
-        // 2. empathetic reply
-        const respRes = await fetch('/api/respond', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ text, emotion })
-        });
-        const respData = await respRes.json();
-        const aiReply = respData.response || 'Sorry, I could not respond.';
+        // Music block
+        const musicObj = flowData.music || {};
+        const song = musicObj.song || '';
+        const artist = musicObj.artist || '';
+        const reason = musicObj.reason || '';
 
-        // 3. music recommendation
-        const musicRes = await fetch('/api/music', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text, emotion })
-            });
-        const musicData = await musicRes.json();
+        // Keep existing UI format (HTML with YouTube link)
+        const youtube_url = `https://www.youtube.com/results?search_query=${encodeURIComponent(`${song} ${artist}`)}`;
+        const recommendationHTML = (
+            `${song} - ${artist}<br>` +
+            `${reason}<br>` +
+            `🔗 <a href='${youtube_url}' target='_blank'>Watch on YouTube</a>`
+        );
 
+        // 1) Show empathetic reply with typing effect
         await typeText(aiReply, true, 1000);
         const lastMsg = chatWindow.lastElementChild;
         addFeedbackButtons('text', aiReply, lastMsg, emotion, null, text);
-        
-        const musicText = `Emotion: ${emotion}\n Music Recommendation🎵 \n${musicData.recommendation}`;
+
+        // 2) Show music recommendation bubble
+        const musicText = `Emotion: ${emotion}\n Music Recommendation🎵 \n${recommendationHTML}`;
         const musicBubble = document.createElement('div');
         musicBubble.classList.add('message', 'ai');
         musicBubble.innerHTML = musicText.replace(/\n/g, '<br>');
 
         chatWindow.appendChild(musicBubble);
         chatWindow.scrollTop = chatWindow.scrollHeight;
-        addFeedbackButtons('music', musicText, musicBubble, emotion, musicData.recommendation, text);
+
+        // For music feedback, store the rendered recommendationHTML (same as before)
+        addFeedbackButtons('music', musicText, musicBubble, emotion, recommendationHTML, text);
 
     } catch (err) {
-    console.error(err);
-    await typeText('🤖 Error: Something went wrong.', true, 600);
-    } finally {
-        sendBtn.disabled = false;
+        console.error(err);
+        await typeText('🤖 Error: Something went wrong.', true, 600);
     }
 });

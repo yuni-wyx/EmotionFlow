@@ -42,17 +42,21 @@ def home():
 
 @app.route("/submit", methods=["POST"])
 def submit():
-    data = request.get_json()
-    user_input = data["user_input"]
+    data = request.get_json(silent=True) or {}
+    user_input = (data.get("user_input") or "").strip()
     user_id = data.get("user_id") or session.get("user_id", "anonymous")
-    if collection:
+
+    if not user_input:
+        return jsonify({"ok": False, "error": "Missing 'user_input'"}), 400
+
+    if collection is not None:
         collection.insert_one({
             "user_id": user_id,
             "text": user_input,
             "timestamp": datetime.now(timezone.utc)
         })
-    ai_reply = generate_response_gemini(user_input)
-    return jsonify({"ai_response": ai_reply})
+        
+    return jsonify({"ok": True}), 200
 
 @app.route("/predict", methods=["POST"])
 def predict_emotions():
@@ -91,21 +95,18 @@ def generate_response():
 @app.route("/api/flow", methods=["POST"])
 def api_flow():
     data = request.get_json(silent=True) or {}
-    user_input = data.get("text") or data.get("user_input") or ""
+    text = data.get("text") or data.get("user_input") or ""
 
-    if not user_input:
-        return jsonify({"ok": False, "error": "Missing 'text' (or 'user_input')"}), 400
-
-    result = generate_flow(user_input)
+    result = generate_flow(text)
 
     if not result.get("ok", True):
-        error_type = result.get("error_type")
-        if error_type == "quota":
+        et = result.get("error_type")
+        if et == "bad_request":
+            return jsonify(result), 400
+        if et == "quota":
             return jsonify(result), 429
-        if error_type == "api":
+        if et == "api":
             return jsonify(result), 503
-        if error_type == "config":
-            return jsonify(result), 500
         return jsonify(result), 500
 
     return jsonify(result), 200
