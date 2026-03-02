@@ -3,7 +3,9 @@
 ### Real-Time Emotional Support with RLHF and Emotion-Aware Content
 
 🔗 **Live Demo:** [https://emotionflow-40672525442.us-central1.run.app](https://emotionflow-40672525442.us-central1.run.app)  
+
 📄 **Project Type:** ML System + Web Application  
+
 ☁️ **Deployment:** Google Cloud Run  
 
 ---
@@ -284,6 +286,6 @@ Emotion Flow demonstrates:
 
 ## 👩‍💻 Author
 
-Yuni Wu
-MS Data Science — University of Colorado Boulder
-ML Systems | Robotics | LLM Alignment | Cloud ML Infrastructure
+Yuni Wu  
+MS Data Science — University of Colorado Boulder  
+ML Systems | Robotics | LLM Alignment | Cloud ML Infrastructure  
