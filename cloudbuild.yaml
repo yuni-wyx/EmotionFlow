@@ -23,7 +23,7 @@ steps:
       '--region', 'us-central1',
       '--platform', 'managed',
       '--allow-unauthenticated',
-      '--set-secrets', 'OPENAI_API_KEY=OPENAI_API_KEY:latest'
+      '--set-secrets', 'OPENAI_API_KEY=OPENAI_API_KEY:latest,MONGODB_URI=MONGODB_URI:latest'
     ]
 
 images:
