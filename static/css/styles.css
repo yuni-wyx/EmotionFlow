@@ -257,3 +257,84 @@ font-family: 'Arial', sans-serif;
 .feedback-btn:active {
     transform: scale(0.95);
 }
+
+.pref-wrapper {
+  margin-top: 10px;
+}
+
+.pref-container {
+  padding: 6px 0 0;
+  text-align: left;
+}
+
+.pref-title {
+  font-size: 13px;
+  opacity: 0.75;
+  margin-bottom: 10px;
+}
+
+.pref-cards {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.pref-card {
+  width: 140px;
+  padding: 12px 12px;
+  border-radius: 14px;
+  border: 2px solid rgba(0,0,0,0.12);
+  background: rgba(255,255,255,0.85);
+  cursor: pointer;
+  user-select: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.pref-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 18px rgba(0,0,0,0.10);
+  border-color: rgba(77, 163, 255, 0.85);
+}
+
+.pref-card.selected {
+  border-color: rgba(77, 163, 255, 1);
+  box-shadow: 0 10px 18px rgba(77,163,255,0.18);
+}
+
+.pref-card.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.pref-label {
+  font-size: 18px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
+.pref-action {
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.pref-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.pref-thank {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #2e7d32;
+  font-weight: 600;
+}
+
+.pref-error {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #b00020;
+  font-weight: 600;
+}

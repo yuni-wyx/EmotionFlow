@@ -97,7 +97,7 @@ function addTextFeedbackButtons(responseText, parentElement, emotion = 'neutral'
     feedbackDiv.setAttribute('data-userinput', userInput);
 
     feedbackDiv.innerHTML = `
-        <div class="feedback-prompt">Do you like this recommendation?</div>
+        <div class="feedback-prompt">Do you like this response?</div>
         <div class="feedback-buttons-group">
             <button class="feedback-btn like-btn" onclick="sendTextFeedback(this, 'like')">👍</button>
             <button class="feedback-btn dislike-btn" onclick="sendTextFeedback(this, 'dislike')">👎</button>
@@ -229,82 +229,192 @@ function addFeedbackButtons(type, responseText, parentElement, emotion, extra, u
     }
 }
 
-chatForm.addEventListener('submit', async e => {
-    e.preventDefault();
-    const text = userInput.value.trim();
-    if (!text) return;
+function makeYoutubeLink(song, artist) {
+  const q = encodeURIComponent(`${song} ${artist}`.trim());
+  return `https://www.youtube.com/results?search_query=${q}`;
+}
 
-    // 1) Get the user_id you stored on anonymousLogin()
+function addPreferenceButtons(parentElement, payload) {
+  const wrap = document.createElement('div');
+  wrap.className = 'pref-wrapper';
+
+  wrap.innerHTML = `
+    <div class="pref-container">
+      <div class="pref-title">Which response feels more supportive?</div>
+      <div class="pref-cards">
+        <div class="pref-card" data-choice="A" role="button" tabindex="0">
+          <div class="pref-label">A</div>
+          <div class="pref-action">Select A</div>
+        </div>
+        <div class="pref-card" data-choice="B" role="button" tabindex="0">
+          <div class="pref-label">B</div>
+          <div class="pref-action">Select B</div>
+        </div>
+      </div>
+      <div class="pref-hint">Your choice helps improve responses (RLHF).</div>
+    </div>
+  `;
+
+  parentElement.appendChild(wrap);
+
+  const cards = wrap.querySelectorAll('.pref-card');
+
+  let submitted = false;
+
+  const send = async (chosen) => {
+    if (submitted) return;
+        submitted = true;
+
+    // disable all cards
+    cards.forEach(c => c.classList.add('disabled'));
+
     const user_id = localStorage.getItem('user_id') || 'anonymous';
-    sendBtn.disabled = true;
 
-    // 2) Store user_input in MongoDB
-    fetch('/submit', {
+    const body = {
+      user_id,
+      text: payload.text,
+      emotion: payload.emotion,
+      request_id: payload.request_id,
+      prompt_version_A: payload.candidates.A.prompt_version,
+      prompt_version_B: payload.candidates.B.prompt_version,
+      response_A: payload.candidates.A.response,
+      response_B: payload.candidates.B.response,
+      chosen
+    };
+
+    try {
+      const res = await fetch('/pref_feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id, user_input: text })
-        }).catch(err => console.warn("submit failed:", err));
+        body: JSON.stringify(body)
+      });
 
-    // 3) Show the user’s message in the chat
+      if (res.ok) {
+        wrap.innerHTML = `<div class="pref-thank">Preference saved ✔ Thanks!</div>`;
+      } else {
+        wrap.innerHTML = `<div class="pref-error">⚠️ Could not save preference.</div>`;
+      }
+    } catch (e) {
+      console.error(e);
+      wrap.innerHTML = `<div class="pref-error">⚠️ Could not save preference.</div>`;
+    }
+  };
+
+  const pick = (choice, el) => {
+    cards.forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+    send(choice);
+  };
+
+  cards.forEach(card => {
+    card.addEventListener('click', () => pick(card.dataset.choice, card));
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        pick(card.dataset.choice, card);
+      }
+    });
+  });
+}
+
+chatForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+
+  const text = userInput.value.trim();
+  if (!text) return;
+
+  const user_id = localStorage.getItem('user_id') || 'anonymous';
+
+  // ✅ 一開始就鎖住，最後一定解鎖
+  sendBtn.disabled = true;
+  userInput.disabled = true;
+
+  try {
+    // 1) 先顯示使用者訊息（UI 不要等後端）
     addMessage(text, false);
     userInput.value = '';
 
-    try {
-        // ✅ Single-call pipeline
-        const flowRes = await fetch('/api/flow', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text })
-        });
+    // 2) /submit 改成「不阻塞」：就算失敗也不影響聊天
+    fetch('/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id, user_input: text })
+    }).catch(err => console.warn('submit failed:', err));
 
-        const flowData = await flowRes.json();
+    // 3) 主要 pipeline：只打一個 /api/flow_ab
+    const flowRes = await fetch('/api/flow_ab', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
 
-        if (!flowRes.ok || flowData.ok === false) {
-            console.error("Flow error:", flowData);
-            await typeText('🤖 Sorry — I had trouble generating a response. Please try again.', true, 600);
-            return;
-        }
+    const flowData = await flowRes.json();
 
-        const emotion = flowData.emotion || 'neutral';
-        const aiReply = flowData.response || 'Sorry, I could not respond.';
-        const rawColors = flowData.color || "#ddd, #eee, #ccc";
-        const colors = rawColors.split(',').map(c => c.trim());
-
-        updateFlowingBackground(colors);
-
-        // Music block
-        const musicObj = flowData.music || {};
-        const song = musicObj.song || '';
-        const artist = musicObj.artist || '';
-        const reason = musicObj.reason || '';
-
-        // Keep existing UI format (HTML with YouTube link)
-        const youtube_url = `https://www.youtube.com/results?search_query=${encodeURIComponent(`${song} ${artist}`)}`;
-        const recommendationHTML = (
-            `${song} - ${artist}<br>` +
-            `${reason}<br>` +
-            `🔗 <a href='${youtube_url}' target='_blank'>Watch on YouTube</a>`
-        );
-
-        // 1) Show empathetic reply with typing effect
-        await typeText(aiReply, true, 1000);
-        const lastMsg = chatWindow.lastElementChild;
-        addFeedbackButtons('text', aiReply, lastMsg, emotion, null, text);
-
-        // 2) Show music recommendation bubble
-        const musicText = `Emotion: ${emotion}\n Music Recommendation🎵 \n${recommendationHTML}`;
-        const musicBubble = document.createElement('div');
-        musicBubble.classList.add('message', 'ai');
-        musicBubble.innerHTML = musicText.replace(/\n/g, '<br>');
-
-        chatWindow.appendChild(musicBubble);
-        chatWindow.scrollTop = chatWindow.scrollHeight;
-
-        // For music feedback, store the rendered recommendationHTML (same as before)
-        addFeedbackButtons('music', musicText, musicBubble, emotion, recommendationHTML, text);
-
-    } catch (err) {
-        console.error(err);
-        await typeText('🤖 Error: Something went wrong.', true, 600);
+    if (!flowRes.ok || flowData.ok === false) {
+      console.error('flow_ab error:', flowData);
+      await typeText('🤖 Sorry — I had trouble generating responses. Please try again.', true, 600);
+      return; // ✅ return 也沒差，finally 會解鎖
     }
+
+    const emotion = flowData.emotion || 'neutral';
+
+    // 背景色
+    const rawColors = flowData.color || "#ddd, #eee, #ccc";
+    const colors = rawColors.split(',').map(c => c.trim());
+    updateFlowingBackground(colors);
+
+    // A/B 回覆
+    const candA = flowData.candidates?.A?.response || "Response A unavailable.";
+    const candB = flowData.candidates?.B?.response || "Response B unavailable.";
+
+    await typeText(`(A) ${candA}`, true, 400);
+    await typeText(`(B) ${candB}`, true, 400);
+
+    // preference buttons
+    const prefBubble = document.createElement('div');
+    prefBubble.classList.add('message', 'ai');
+    chatWindow.appendChild(prefBubble);
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+
+    addPreferenceButtons(prefBubble, {
+    text,
+    emotion,
+    request_id: flowData.request_id,
+    candidates: {
+        A: { prompt_version: flowData.candidates.A.prompt_version, response: candA },
+        B: { prompt_version: flowData.candidates.B.prompt_version, response: candB }
+    }
+    });
+
+    // music（可選）
+    const music = flowData.music || {};
+    const song = music.song || '';
+    const artist = music.artist || '';
+    const reason = music.reason || '';
+
+    if (song || artist || reason) {
+      const youtube = makeYoutubeLink(song, artist);
+      const recommendationHTML =
+        `${song} - ${artist}<br>` +
+        `${reason}<br>` +
+        `🔗 <a href='${youtube}' target='_blank'>Watch on YouTube</a>`;
+
+      const musicBubble = document.createElement('div');
+      musicBubble.classList.add('message', 'ai');
+      musicBubble.innerHTML = `Emotion: ${emotion}<br>Music Recommendation🎵<br>${recommendationHTML}`;
+      chatWindow.appendChild(musicBubble);
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+
+      addFeedbackButtons('music', `Emotion: ${emotion}\nMusic Recommendation\n${recommendationHTML}`, musicBubble, emotion, recommendationHTML, text);
+    }
+
+  } catch (err) {
+    console.error(err);
+    await typeText('🤖 Error: Something went wrong.', true, 600);
+  } finally {
+    // ✅ 無論成功/失敗/return，都一定會跑到這裡
+    sendBtn.disabled = false;
+    userInput.disabled = false;
+    userInput.focus();
+  }
 });

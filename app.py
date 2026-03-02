@@ -12,6 +12,7 @@ from recommender import generate_music_recommendation
 from bg_color import generate_color
 from dashboard import create_dashboard
 from flow import generate_flow
+from rlhf_flow import generate_flow_ab
 from secret import get_secret
 from config import is_dev_mode
 DEV_MODE = is_dev_mode()
@@ -33,6 +34,7 @@ db = mongo_client["emotion_platform"] if mongo_client is not None else None
 collection = db["user_inputs"] if db is not None else None
 text_feedback_collection = db["text_feedbacks"] if db is not None else None
 music_feedback_collection = db["music_feedbacks"] if db is not None else None
+preference_collection = db["preference_pairs"] if db is not None else None
 
 dash_app = create_dashboard(app)
 
@@ -55,7 +57,7 @@ def submit():
             "text": user_input,
             "timestamp": datetime.now(timezone.utc)
         })
-        
+
     return jsonify({"ok": True}), 200
 
 @app.route("/predict", methods=["POST"])
@@ -98,6 +100,25 @@ def api_flow():
     text = data.get("text") or data.get("user_input") or ""
 
     result = generate_flow(text)
+
+    if not result.get("ok", True):
+        et = result.get("error_type")
+        if et == "bad_request":
+            return jsonify(result), 400
+        if et == "quota":
+            return jsonify(result), 429
+        if et == "api":
+            return jsonify(result), 503
+        return jsonify(result), 500
+
+    return jsonify(result), 200
+
+@app.route("/api/flow_ab", methods=["POST"])
+def api_flow_ab():
+    data = request.get_json(silent=True) or {}
+    text = data.get("text") or data.get("user_input") or ""
+
+    result = generate_flow_ab(text)
 
     if not result.get("ok", True):
         et = result.get("error_type")
@@ -191,6 +212,31 @@ def music_save_feedback():
         })
 
     return {"status": "ok"}, 200
+
+@app.route("/pref_feedback", methods=["POST"])
+def pref_feedback():
+    data = request.get_json(silent=True) or {}
+    user_id = data.get("user_id", "anonymous")
+
+    doc = {
+        "user_id": user_id,
+        "text": data.get("text", ""),
+        "emotion": data.get("emotion", "neutral"),
+        "request_id": data.get("request_id"),
+        "prompt_version_A": data.get("prompt_version_A"),
+        "prompt_version_B": data.get("prompt_version_B"),
+        "response_A": data.get("response_A"),
+        "response_B": data.get("response_B"),
+        "emotion_key": (data.get("emotion") or "neutral").split()[0].lower(),
+        "pair_id": data.get("request_id") or uuid.uuid4().hex[:10],
+        "chosen": data.get("chosen"),  # "A" or "B"
+        "timestamp": datetime.now(timezone.utc)
+    }
+
+    if preference_collection is not None:
+        preference_collection.insert_one(doc)
+
+    return jsonify({"ok": True}), 200
 
 @app.route("/callback")
 def callback():
